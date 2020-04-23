@@ -19,6 +19,9 @@ from a2c_ppo_acktr.model import Policy
 from a2c_ppo_acktr.storage import RolloutStorage
 from evaluation import evaluate
 
+from tensorboardX import SummaryWriter
+from datetime import datetime
+
 
 def main():
     args = get_args()
@@ -29,6 +32,17 @@ def main():
     if args.cuda and torch.cuda.is_available() and args.cuda_deterministic:
         torch.backends.cudnn.benchmark = False
         torch.backends.cudnn.deterministic = True
+
+    save_path = os.path.join(args.save_dir, args.algo + "/{}_{}_{}".format(args.env_name, args.id, datetime.now().strftime("%Y%m%d-%H%M")))
+    try:
+        os.makedirs(save_path)
+    except OSError:
+        pass
+    # summary_name = save_path + '{}_{}_{}'.format(args.env_name, args.id, datetime.now().strftime("%Y%m%d-%H%M"))
+    sw = SummaryWriter(save_path)
+
+    # import sys
+    # sys.exit(1)
 
     log_dir = os.path.expanduser(args.log_dir)
     eval_log_dir = log_dir + "_eval"
@@ -161,14 +175,16 @@ def main():
 
         rollouts.after_update()
 
+        total_num_steps = (j + 1) * args.num_processes * args.num_steps
+
         # save for every interval-th episode or for the last epoch
         if (j % args.save_interval == 0
                 or j == num_updates - 1) and args.save_dir != "":
-            save_path = os.path.join(args.save_dir, args.algo)
-            try:
-                os.makedirs(save_path)
-            except OSError:
-                pass
+            # save_path = os.path.join(args.save_dir, args.algo)
+            # try:
+            #     os.makedirs(save_path)
+            # except OSError:
+            #     pass
 
             torch.save([
                 actor_critic,
@@ -176,8 +192,14 @@ def main():
             ], os.path.join(save_path, args.env_name + ".pt"))
 
         if j % args.log_interval == 0 and len(episode_rewards) > 1:
-            total_num_steps = (j + 1) * args.num_processes * args.num_steps
+            # total_num_steps = (j + 1) * args.num_processes * args.num_steps
             end = time.time()
+
+            sw.add_scalar("Value loss", value_loss, total_num_steps)
+            sw.add_scalar("action loss", action_loss, total_num_steps)
+            sw.add_scalar("dist entropy loss", dist_entropy, total_num_steps)
+            sw.add_scalar("Episode rewards", np.mean(episode_rewards), total_num_steps)
+
             print(
                 "Updates {}, num timesteps {}, FPS {} \n Last {} training episodes: mean/median reward {:.1f}/{:.1f}, min/max reward {:.1f}/{:.1f}\n"
                 .format(j, total_num_steps,
@@ -190,8 +212,9 @@ def main():
         if (args.eval_interval is not None and len(episode_rewards) > 1
                 and j % args.eval_interval == 0):
             ob_rms = utils.get_vec_normalize(envs).ob_rms
-            evaluate(actor_critic, ob_rms, args.env_name, args.seed,
+            eval_r = evaluate(actor_critic, ob_rms, args.env_name, args.seed,
                      args.num_processes, eval_log_dir, device)
+            sw.add_scalar("Episode rewards", eval_r, total_num_steps)
 
 
 if __name__ == "__main__":

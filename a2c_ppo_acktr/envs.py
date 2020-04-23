@@ -13,6 +13,9 @@ from baselines.common.vec_env.shmem_vec_env import ShmemVecEnv
 from baselines.common.vec_env.vec_normalize import \
     VecNormalize as VecNormalize_
 
+import dmc2gym
+import dm_control2gym
+
 try:
     import dm_control2gym
 except ImportError:
@@ -33,7 +36,9 @@ def make_env(env_id, seed, rank, log_dir, allow_early_resets):
     def _thunk():
         if env_id.startswith("dm"):
             _, domain, task = env_id.split('.')
-            env = dm_control2gym.make(domain_name=domain, task_name=task)
+            # env = dm_control2gym.make(domain_name=domain, task_name=task)
+            env = dmc2gym.make(domain_name=domain, task_name=task)
+
         else:
             env = gym.make(env_id)
 

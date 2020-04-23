@@ -42,8 +42,8 @@ def get_args():
         help='discount factor for rewards (default: 0.99)')
     parser.add_argument(
         '--use-gae',
-        action='store_true',
-        default=False,
+        action='store_false',
+        default=True,
         help='use generalized advantage estimation')
     parser.add_argument(
         '--gae-lambda',
@@ -75,17 +75,17 @@ def get_args():
     parser.add_argument(
         '--num-processes',
         type=int,
-        default=16,
+        default=8,
         help='how many training CPU processes to use (default: 16)')
     parser.add_argument(
         '--num-steps',
         type=int,
-        default=5,
+        default=1000,
         help='number of forward steps in A2C (default: 5)')
     parser.add_argument(
         '--ppo-epoch',
         type=int,
-        default=4,
+        default=10,
         help='number of ppo epochs (default: 4)')
     parser.add_argument(
         '--num-mini-batch',
@@ -100,17 +100,17 @@ def get_args():
     parser.add_argument(
         '--log-interval',
         type=int,
-        default=10,
+        default=1,
         help='log interval, one log per n updates (default: 10)')
     parser.add_argument(
         '--save-interval',
         type=int,
-        default=100,
+        default=5,
         help='save interval, one save per n updates (default: 100)')
     parser.add_argument(
         '--eval-interval',
         type=int,
-        default=None,
+        default=20,
         help='eval interval, one eval per n updates (default: None)')
     parser.add_argument(
         '--num-env-steps',
@@ -136,8 +136,8 @@ def get_args():
         help='disables CUDA training')
     parser.add_argument(
         '--use-proper-time-limits',
-        action='store_true',
-        default=False,
+        action='store_false',
+        default=True,
         help='compute returns taking into account time limits')
     parser.add_argument(
         '--recurrent-policy',
@@ -148,6 +148,11 @@ def get_args():
         '--use-linear-lr-decay',
         action='store_true',
         default=False,
+        help='use a linear schedule on the learning rate')
+    parser.add_argument(
+        '--id',
+        type=str,
+        default="test",
         help='use a linear schedule on the learning rate')
     args = parser.parse_args()
 

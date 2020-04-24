@@ -14,7 +14,7 @@ from baselines.common.vec_env.vec_normalize import \
     VecNormalize as VecNormalize_
 
 import dmc2gym
-import dm_control2gym
+# import dm_control2gym
 
 try:
     import dm_control2gym
@@ -30,6 +30,70 @@ try:
     import pybullet_envs
 except ImportError:
     pass
+
+import multiprocessing as mp
+from baselines import logger
+from baselines.common.vec_env.util import dict_to_obs, obs_space_info, obs_to_dict
+from baselines.common.vec_env.vec_env import \
+    VecEnvWrapper, VecEnv, CloudpickleWrapper, clear_mpi_env_vars
+import ctypes
+from baselines.common.vec_env.shmem_vec_env import _subproc_worker
+_NP_TO_CT = {np.float32: ctypes.c_float,
+             np.int32: ctypes.c_int32,
+             np.int8: ctypes.c_int8,
+             np.uint8: ctypes.c_char,
+             np.bool: ctypes.c_bool}
+class ShmemVecEnv_DR(ShmemVecEnv):
+    def __init__(self, env_fns, spaces=None, context='spawn'):
+        """
+        If you don't specify observation_space, we'll have to create a dummy
+        environment to get it.
+        """
+        ctx = mp.get_context(context)
+        if spaces:
+            observation_space, action_space = spaces
+        else:
+            logger.log('Creating dummy env object to get spaces')
+            with logger.scoped_configure(format_strs=[]):
+                dummy = env_fns[0]()
+                observation_space, action_space = dummy.observation_space, dummy.action_space
+                dummy.close()
+                try:
+                    # print("dummy attri ",dir(dummy.env.env.env._env.physics))
+                    self.physics = dummy.env.env.env._env.physics
+                    self.dummy_env = dummy.env.env.env
+                except Exception as e:
+                    print(e)
+                    pass
+                del dummy
+        VecEnv.__init__(self, len(env_fns), observation_space, action_space)
+        self.obs_keys, self.obs_shapes, self.obs_dtypes = obs_space_info(observation_space)
+        self.obs_bufs = [
+            {k: ctx.Array(_NP_TO_CT[self.obs_dtypes[k].type], int(np.prod(self.obs_shapes[k]))) for k in self.obs_keys}
+            for _ in env_fns]
+        self.parent_pipes = []
+        self.procs = []
+        with clear_mpi_env_vars():
+            for env_fn, obs_buf in zip(env_fns, self.obs_bufs):
+                wrapped_fn = CloudpickleWrapper(env_fn)
+                parent_pipe, child_pipe = ctx.Pipe()
+                proc = ctx.Process(target=_subproc_worker,
+                            args=(child_pipe, parent_pipe, wrapped_fn, obs_buf, self.obs_shapes, self.obs_dtypes, self.obs_keys))
+                proc.daemon = True
+                self.procs.append(proc)
+                self.parent_pipes.append(parent_pipe)
+                proc.start()
+                child_pipe.close()
+        self.waiting_step = False
+        self.viewer = None
+    def step_async(self, actions):
+        assert len(actions) == len(self.parent_pipes)
+        for pipe, act in zip(self.parent_pipes, actions):
+            pipe.send(('step', act))
+    def step_wait(self):
+        outs = [pipe.recv() for pipe in self.parent_pipes]
+        obs, rews, dones, infos = zip(*outs)
+        return self._decode_obses(obs), np.array(rews), np.array(dones), infos
 
 
 def make_env(env_id, seed, rank, log_dir, allow_early_resets):
@@ -91,7 +155,7 @@ def make_vec_envs(env_name,
     ]
 
     if len(envs) > 1:
-        envs = ShmemVecEnv(envs, context='fork')
+        envs = ShmemVecEnv_DR(envs, context='fork')
     else:
         envs = DummyVecEnv(envs)
 

@@ -22,6 +22,29 @@ from evaluation import evaluate
 from tensorboardX import SummaryWriter
 from datetime import datetime
 
+def convert_to_norm(action, env):
+    # action = action.astype(np.float64)
+    # print(env._true_action_space.high, env._norm_action_space.high)
+    true_delta = torch.Tensor(env._true_action_space.high - env._true_action_space.low)
+    norm_delta = torch.Tensor(env._norm_action_space.high - env._norm_action_space.low)
+    action = (action - torch.Tensor(env._true_action_space.low)) / true_delta
+    action = action * norm_delta + torch.Tensor(env._norm_action_space.low)
+    # action = action.astype(np.float32)
+    return action
+
+def customize_action(action, action_space, args, joints, dummy_env):
+    # print("action: ",type(action))
+    action_vec = torch.zeros((args.num_processes, action_space.shape[0]))
+    action_vec = convert_to_norm(action_vec, dummy_env)
+    # Respective
+    for i in range(action.size(0)):
+        for j,x in enumerate(joints):
+            action_vec[i,x] = action[i,j]
+    # # Bind
+    # for i,x in enumerate(self.enabled_action):
+    #     action_vec[x] = action[0]
+    # print("action vec: ", type(action_vec))
+    return action_vec, action
 
 def main():
     args = get_args()
@@ -55,9 +78,28 @@ def main():
     envs = make_vec_envs(args.env_name, args.seed, args.num_processes,
                          args.gamma, args.log_dir, device, False)
 
+    # joint select
+    custom = True
+    if custom:
+        from gym import spaces
+        joints = [0,4,5,6,10,11,12,17,20]
+        bounds = envs.venv.venv.physics.model.actuator_ctrlrange.copy()
+        low, high = bounds.T
+        low, high = np.take(low, joints), np.take(high, joints)
+        # print(low, high)
+        envs_action_space = spaces.Box(low=low, high=high, dtype=np.float32)
+        dummy_env = envs.venv.venv.dummy_env
+        # print(dir(dummy_env))
+    else:
+        envs_action_space = envs.action_space
+
+    # import sys
+    # sys.exit(1)
+
     actor_critic = Policy(
         envs.observation_space.shape,
-        envs.action_space,
+        # envs.action_space,
+        envs_action_space,
         base_kwargs={'recurrent': args.recurrent_policy})
     actor_critic.to(device)
 
@@ -88,7 +130,8 @@ def main():
     if args.gail:
         assert len(envs.observation_space.shape) == 1
         discr = gail.Discriminator(
-            envs.observation_space.shape[0] + envs.action_space.shape[0], 100,
+            # envs.observation_space.shape[0] + envs.action_space.shape[0], 100,
+            envs.observation_space.shape[0] + envs_action_space.shape[0], 100,
             device)
         file_name = os.path.join(
             args.gail_experts_dir, "trajs_{}.pt".format(
@@ -104,7 +147,8 @@ def main():
             drop_last=drop_last)
 
     rollouts = RolloutStorage(args.num_steps, args.num_processes,
-                              envs.observation_space.shape, envs.action_space,
+                              envs.observation_space.shape, envs_action_space,
+                            #   envs.observation_space.shape, envs.action_space,
                               actor_critic.recurrent_hidden_state_size)
 
     obs = envs.reset()
@@ -131,8 +175,20 @@ def main():
                     rollouts.obs[step], rollouts.recurrent_hidden_states[step],
                     rollouts.masks[step])
 
+            # print("raw action", type(action))    
+
+            if custom:
+                action_vec, action = customize_action(action, envs.action_space, args, joints, dummy_env)
+                obs, reward, done, infos = envs.step(action_vec)
+            else:
+                obs, reward, done, infos = envs.step(action)
+
+
             # Obser reward and next obs
-            obs, reward, done, infos = envs.step(action)
+            # obs, reward, done, infos = envs.step(action)
+
+            # import sys
+            # sys.exit(1)
 
             for info in infos:
                 if 'episode' in info.keys():
@@ -195,10 +251,10 @@ def main():
             # total_num_steps = (j + 1) * args.num_processes * args.num_steps
             end = time.time()
 
-            sw.add_scalar("Value loss", value_loss, total_num_steps)
-            sw.add_scalar("action loss", action_loss, total_num_steps)
-            sw.add_scalar("dist entropy loss", dist_entropy, total_num_steps)
-            sw.add_scalar("Episode rewards", np.mean(episode_rewards), total_num_steps)
+            sw.add_scalar("train/Value_loss", value_loss, total_num_steps)
+            sw.add_scalar("train/action_loss", action_loss, total_num_steps)
+            sw.add_scalar("train/dist_entropy_loss", dist_entropy, total_num_steps)
+            sw.add_scalar("train/episode_reward", np.mean(episode_rewards), total_num_steps)
 
             print(
                 "Updates {}, num timesteps {}, FPS {} \n Last {} training episodes: mean/median reward {:.1f}/{:.1f}, min/max reward {:.1f}/{:.1f}\n"
@@ -213,8 +269,8 @@ def main():
                 and j % args.eval_interval == 0):
             ob_rms = utils.get_vec_normalize(envs).ob_rms
             eval_r = evaluate(actor_critic, ob_rms, args.env_name, args.seed,
-                     args.num_processes, eval_log_dir, device)
-            sw.add_scalar("Episode rewards", eval_r, total_num_steps)
+                     args.num_processes, eval_log_dir, device, custom, args, joints, dummy_env, customize_action)
+            sw.add_scalar("eval/episode_reward", eval_r, total_num_steps)
 
 
 if __name__ == "__main__":

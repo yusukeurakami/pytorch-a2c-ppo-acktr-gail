@@ -6,7 +6,7 @@ from a2c_ppo_acktr.envs import make_vec_envs
 
 
 def evaluate(actor_critic, ob_rms, env_name, seed, num_processes, eval_log_dir,
-             device):
+             device, custom=False, args=None, joints=None, dummy_env=None, customize_action=None):
     eval_envs = make_vec_envs(env_name, seed + num_processes, num_processes,
                               None, eval_log_dir, device, True)
 
@@ -30,8 +30,14 @@ def evaluate(actor_critic, ob_rms, env_name, seed, num_processes, eval_log_dir,
                 eval_masks,
                 deterministic=True)
 
-        # Obser reward and next obs
-        obs, _, done, infos = eval_envs.step(action)
+        if custom:
+            action_vec, action = customize_action(action, eval_envs.action_space, args, joints, dummy_env)
+            obs, reward, done, infos = eval_envs.step(action_vec)
+        else:
+            obs, reward, done, infos = eval_envs.step(action)
+
+        # # Obser reward and next obs
+        # obs, _, done, infos = eval_envs.step(action)
 
         eval_masks = torch.tensor(
             [[0.0] if done_ else [1.0] for done_ in done],
